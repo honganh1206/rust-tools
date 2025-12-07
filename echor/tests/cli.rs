@@ -1,4 +1,6 @@
 use assert_cmd::cargo;
+// Functions or expressions that evaluates to a Boolean value
+// always return either true or false
 use predicates::prelude::*;
 use std::fs;
 
