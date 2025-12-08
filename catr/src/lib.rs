@@ -24,6 +24,8 @@ pub fn run(config: Config) -> MyResult<()> {
             // There is stdin?
             Ok(file) => {
                 let mut last_num = 0;
+                // Using lines() means we replace Windows CRLF
+                // with Unix-style newlines
                 for (line_num, line_result) in file.lines().enumerate() {
                     let line = line_result?;
                     // Print with line numbers if want

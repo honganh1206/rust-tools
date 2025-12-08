@@ -1,6 +1,7 @@
 use clap::{App, Arg};
 use std::error::Error;
 use std::fs::File;
+use std::io::Read;
 use std::io::{self, BufRead, BufReader};
 
 type MyResult<T> = Result<T, Box<dyn Error>>;
@@ -18,7 +19,37 @@ pub fn run(config: Config) -> MyResult<()> {
     for filename in config.files {
         match open(&filename) {
             Err(err) => eprintln!("{}: {}", filename, err),
-            Ok(_) => println!("Opened {}", filename),
+            Ok(mut file) => {
+                if let Some(num_bytes) = config.bytes {
+                    // Read limited number of bytes from the buffer only
+                    // to properly size the buffer
+                    let mut handle = file.take(num_bytes as u64);
+                    let mut buffer = vec![0; num_bytes];
+                    // Pull some bytes from buffer to handle
+                    let bytes_read = handle.read(&mut buffer)?;
+
+                    // Convert selected bytes to string
+                    // (some of them might not be a valid UTF-8)
+                    // so we use range operator ..
+                    // to select bytes actually read
+                    print!("{}", String::from_utf8_lossy(&buffer[..bytes_read]))
+                } else {
+                    // Read the whole content?
+                    let mut line = String::new();
+                    // Iterate counting up from 0 to requested number of lines
+                    for _ in 0..config.lines {
+                        // We use read_line() specifically
+                        // to also append the newline delimiter to the buffer
+                        let bytes = file.read_line(&mut line)?;
+                        if bytes == 0 {
+                            break;
+                        }
+                        print!("{}", line);
+                        // Reset the string for the next read from buffer
+                        line.clear();
+                    }
+                }
+            }
         }
     }
     Ok(())
