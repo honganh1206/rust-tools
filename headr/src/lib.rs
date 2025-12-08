@@ -16,23 +16,38 @@ pub struct Config {
 }
 
 pub fn run(config: Config) -> MyResult<()> {
-    for filename in config.files {
-        match open(&filename) {
+    let num_files = config.files.len();
+
+    for (file_num, filename) in config.files.iter().enumerate() {
+        match open(filename) {
             Err(err) => eprintln!("{}: {}", filename, err),
             Ok(mut file) => {
+                // File separator
+                if num_files > 1 {
+                    println!(
+                        "{}==> {} <==",
+                        if file_num > 0 { "\n" } else { "" },
+                        filename,
+                    )
+                }
+
                 if let Some(num_bytes) = config.bytes {
                     // Read limited number of bytes from the buffer only
                     // to properly size the buffer
-                    let mut handle = file.take(num_bytes as u64);
-                    let mut buffer = vec![0; num_bytes];
+                    //let mut handle = file.take(num_bytes as u64);
+                    //let mut buffer = vec![0; num_bytes];
                     // Pull some bytes from buffer to handle
-                    let bytes_read = handle.read(&mut buffer)?;
+                    //let bytes_read = handle.read(&mut buffer)?;
 
                     // Convert selected bytes to string
                     // (some of them might not be a valid UTF-8)
                     // so we use range operator ..
                     // to select bytes actually read
-                    print!("{}", String::from_utf8_lossy(&buffer[..bytes_read]))
+                    //print!("{}", String::from_utf8_lossy(&buffer[..bytes_read]))
+
+                    // Another approach, safe and shortest
+                    let bytes: Result<Vec<_>, _> = file.bytes().take(num_bytes).collect();
+                    print!("{}", String::from_utf8_lossy(&bytes?));
                 } else {
                     // Read the whole content?
                     let mut line = String::new();
