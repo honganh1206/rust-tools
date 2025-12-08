@@ -23,14 +23,20 @@ pub fn run(config: Config) -> MyResult<()> {
             Err(err) => eprintln!("Failed to open {}: {}", filename, err),
             // There is stdin?
             Ok(file) => {
-                let mut line_num = 0;
-                for line_result in file.lines() {
+                let mut last_num = 0;
+                for (line_num, line_result) in file.lines().enumerate() {
                     let line = line_result?;
-                    line_num += 1;
-
                     // Print with line numbers if want
                     if config.number_lines {
-                        println!("{:>6}\t{}", line_num, line);
+                        println!("{:>6}\t{}", line_num + 1, line);
+                    } else if config.number_nonblank_lines {
+                        // Apply line numbers for non-blank lines
+                        if !line.is_empty() {
+                            last_num += 1;
+                            println!("{:>6}\t{}", last_num, line);
+                        } else {
+                            println!();
+                        }
                     } else {
                         println!("{}", line);
                     }
@@ -60,6 +66,7 @@ pub fn get_args() -> MyResult<Config> {
             // Flag to print line numbers
             Arg::with_name("number")
                 .short("n")
+                .long("number")
                 .help("Number of lines")
                 .takes_value(false)
                 .conflicts_with("number_nonblank"),
