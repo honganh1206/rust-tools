@@ -1,11 +1,10 @@
 use anyhow::Result;
-use assert_cmd::Command;
+use assert_cmd::cargo;
 use predicates::prelude::*;
 use pretty_assertions::assert_eq;
 use rand::{Rng, distributions::Alphanumeric};
 use std::fs;
 
-const PRG: &str = "wcr";
 const EMPTY: &str = "tests/inputs/empty.txt";
 const FOX: &str = "tests/inputs/fox.txt";
 // Contain a lot of Unicode characters that require multiple bytes
@@ -33,7 +32,10 @@ fn run(args: &[&str], expected_file: &str) -> Result<()> {
     let expected = fs::read_to_string(expected_file)?;
     // Execute the binary with args and return OK
     // if Err variant is present, test panics with message "fail"
-    let output = Command::cargo_bin(PRG)?.args(args).output().expect("fail");
+    let output = cargo::cargo_bin_cmd!("wcr")
+        .args(args)
+        .output()
+        .expect("fail");
     assert!(output.status.success());
 
     // Convert bytes to string
@@ -47,7 +49,7 @@ fn run(args: &[&str], expected_file: &str) -> Result<()> {
 fn skips_bad_file() -> Result<()> {
     let bad = gen_bad_file();
     let expected = format!("{bad}: .* [(]os error 2[)]");
-    Command::cargo_bin(PRG)?
+    cargo::cargo_bin_cmd!("wcr")
         .arg(bad)
         .assert()
         .success()
@@ -57,14 +59,15 @@ fn skips_bad_file() -> Result<()> {
 
 #[test]
 fn dies_chars_and_bytes() -> Result<()> {
+    // NOTE: Clap's API change, so the pattern order might not as expected
     // Conflicting arg use, only 1 should be present,
     // since we cannot treat the same input as both char-counted and byte-counted
-    Command::cargo_bin(PRG)?
+    cargo::cargo_bin_cmd!("wcr")
         .args(["-m", "-c"])
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "the argument '--chars' cannot be used with '--bytes'", // Why??
+            "the argument '--chars' cannot be used with '--bytes'",
         ));
 
     Ok(())
@@ -74,10 +77,10 @@ fn dies_chars_and_bytes() -> Result<()> {
 fn atlamal_stdin() -> Result<()> {
     let input = fs::read_to_string(ATLAMAL)?;
 
-    // The ? operator (shorthand error return) ensures we return immediately if Err is returned when reading file
+    // The ? operator (shorthand error return) ensues we return immediately if Err is returned when reading file
     let expected = fs::read_to_string("tests/expected/atlamal.txt.stdin.out")?;
 
-    let output = Command::cargo_bin(PRG)?
+    let output = cargo::cargo_bin_cmd!("wcr")
         // We need ? operator
         // so then we can use method chaining with write_stdin
         // to handle Err return case
