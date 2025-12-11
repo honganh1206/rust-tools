@@ -75,7 +75,7 @@ fn atlamal_stdin() -> Result<()> {
     let input = fs::read_to_string(ATLAMAL)?;
 
     // The ? operator (shorthand error return) ensures we return immediately if Err is returned when reading file
-    let expected = fs::read("tests/expected/atlamal.txt.stdin.out")?;
+    let expected = fs::read_to_string("tests/expected/atlamal.txt.stdin.out")?;
 
     let output = Command::cargo_bin(PRG)?
         // We need ? operator
