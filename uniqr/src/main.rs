@@ -93,6 +93,22 @@ fn run(config: Config) -> MyResult<()> {
     // TIP: No need to declare a type
     // since Rust can infer it?
     let mut count: u64 = 0;
+
+    // WE USE A CLOSURE :)
+    // Now I get it: Closure is an anon func that accepts vars from its enclosing env.
+    // Btw Rust's syntax for closure is weird IMO.
+    let print = |count: u64, text: &str| {
+        // Accepting count from outer env here
+        if count > 0 {
+            if config.count {
+                // why borrowed here???
+                print!("{:>4} {}", count, text);
+            } else {
+                print!("{}", text);
+            }
+        }
+    };
+
     loop {
         // Append delimiter to buffer,
         // thus preserving line ending?
@@ -107,10 +123,8 @@ fn run(config: Config) -> MyResult<()> {
             // Encounter non-duplicate line,
             // so we copy it for later comparison
             // and reset the counter
-            if count > 0 {
-                // After calculating duplicate adjacent lines
-                print!("{:>4} {}", count, previous);
-            }
+
+            print(count, &previous);
             previous = line.clone();
             count = 0;
         }
@@ -119,10 +133,7 @@ fn run(config: Config) -> MyResult<()> {
         line.clear();
     }
 
-    if count > 0 {
-        print!("{:>4} {}", count, previous);
-    }
-
+    print(count, &previous);
     Ok(())
 }
 
