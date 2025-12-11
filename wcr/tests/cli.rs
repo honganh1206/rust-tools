@@ -1,3 +1,4 @@
+// Provide dynamic error container as Result<T, anyhow::Error>
 use anyhow::Result;
 use assert_cmd::cargo;
 use predicates::prelude::*;
