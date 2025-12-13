@@ -101,36 +101,47 @@ fn get_args() -> MyResult<Config> {
 }
 
 fn run(config: Config) -> MyResult<()> {
+    let tyle_filter = |entry: &DirEntry| {
+        config.entry_types.is_empty()
+            || config
+                .entry_types
+                .iter()
+                .any(|entry_type| match entry_type {
+                    Link => entry.file_type().is_symlink(),
+                    Dir => entry.file_type().is_dir(),
+                    File => entry.file_type().is_file(),
+                })
+    };
+
+    let name_filter = |entry: &DirEntry| {
+        config.names.is_empty()
+            || config
+                .names
+                .iter()
+                .any(|re| re.is_match(&entry.file_name().to_string_lossy()))
+    };
     for path in config.paths {
-        for entry in WalkDir::new(path) {
-            match entry {
-                Err(e) => eprintln!("{}", e),
-                Ok(entry) => {
-                    // 1st condition: Either no entry type specified
-                    // or match any of the entry type here
-                    if (config.entry_types.is_empty()
-                        || config
-                            .entry_types
-                            .iter()
-                            .any(|entry_type| match entry_type {
-                                Link => entry.file_type().is_symlink(),
-                                Dir => entry.file_type().is_dir(),
-                                File => entry.file_type().is_file(),
-                            })) 
-                    // 2nd condition: Either no file name specified for regex
-                    // or one
-                    && (config.names.is_empty()
-                        || config.names.iter().any(|re| {
-                        re.is_match(
-                            &entry.file_name().to_string_lossy(),
-                        )
-                    }))
-                    {
-                        println!("{}", entry.path().display())
-                    }
+        let entries = WalkDir::new(path)
+            .into_iter()
+            // Map each Result into a closure
+            // that either prints errors and removes them
+            // or wrap result in Some.
+            .filter_map(|e| match e {
+                Err(e) => {
+                    eprintln!("{}", e);
+                    None
                 }
-            }
-        }
+                // Wrap entry in Some of Option
+                Ok(entry) => Some(entry),
+            })
+            .filter(tyle_filter)
+            .filter(name_filter)
+            .map(|entry| entry.path().display().to_string())
+            // Explicity declare to convert from iterator
+            // to a collection (vector) of string type
+            .collect::<Vec<_>>();
+
+        println!("{}", entries.join("\n"));
     }
     Ok(())
 }
