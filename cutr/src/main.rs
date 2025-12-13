@@ -1,9 +1,17 @@
 use crate::Extract::*;
+use anyhow::{Result, anyhow, bail};
 use clap::{App, Arg};
+use csv::{ReaderBuilder, StringRecord, WriterBuilder};
+use regex::Regex;
 use std::{error::Error, ops::Range};
+use std::{
+    fs::File,
+    io::{self, BufRead, BufReader},
+    num::NonZeroUsize,
+};
 
 type MyResult<T> = Result<T, Box<dyn Error>>;
-// Array of range values e.g., 1.. 3
+// Array of range values e.g., 1..3
 type PositionList = Vec<Range<usize>>;
 
 #[derive(Debug)]
@@ -34,22 +42,195 @@ fn get_args() -> MyResult<Config> {
         .version("0.1.0")
         .author("Hong Anh Pham")
         .about("Rust cut")
-        // What goes here?
+        .arg(
+            Arg::with_name("files")
+                .value_name("FILE")
+                .help("Input file(s)")
+                .multiple(true)
+                .default_value("-"),
+        )
+        .arg(
+            // Tell us where one field ends and next field begins
+            Arg::with_name("delimiter")
+                .value_name("DELIMITER")
+                .short("d")
+                .long("delim")
+                .help("Field delimiter")
+                .default_value("\t"),
+        )
+        .arg(
+            Arg::with_name("fields")
+                .value_name("FIELDS")
+                .short("f")
+                .long("fields")
+                .help("Selected fields")
+                .conflicts_with_all(&["chars", "bytes"]),
+        )
+        .arg(
+            Arg::with_name("bytes")
+                .value_name("BYTES")
+                .short("b")
+                .long("bytes")
+                .help("Selected bytes")
+                .conflicts_with_all(&["fields", "chars"]),
+        )
+        .arg(
+            Arg::with_name("chars")
+                .value_name("CHARS")
+                .short("c")
+                .long("chars")
+                .help("Selected characters")
+                .conflicts_with_all(&["fields", "bytes"]),
+        )
         .get_matches();
+
+    let delimiter = matches.value_of("delimiter").unwrap();
+    // why to bytes?
+    let delim_bytes = delimiter.as_bytes();
+    if delim_bytes.len() != 1 {
+        return Err(From::from(format!(
+            "--delim \"{}\" must be a single byte",
+            delimiter
+        )));
+    }
+    let fields = matches.value_of("fields").map(parse_pos).transpose()?;
+    let bytes = matches.value_of("bytes").map(parse_pos).transpose()?;
+    let chars = matches.value_of("chars").map(parse_pos).transpose()?;
+
+    // Figure out which variant to create or generate an error
+    // if the user fails to select bytes, chars, or fields
+    let extract = if let Some(field_pos) = fields {
+        Fields(field_pos)
+    } else if let Some(byte_pos) = bytes {
+        Bytes(byte_pos)
+    } else if let Some(char_pos) = chars {
+        Chars(char_pos)
+    } else {
+        // Convert from Box type to string?
+        return Err(From::from("Must have --fields, --bytes, or --chars"));
+    };
+
+    Ok(Config {
+        files: matches.values_of_lossy("files").unwrap(),
+        // Are we borrowing value of delim_bytes?
+        delimiter: *delim_bytes.first().unwrap(),
+        extract,
+    })
 }
 
 fn run(config: Config) -> MyResult<()> {
-    println!("{:#?}", &config);
+    for filename in &config.files {
+        match open(filename) {
+            Err(err) => eprintln!("{}: {}", filename, err),
+            Ok(_) => println!("Opened {}", filename),
+        }
+    }
     Ok(())
 }
 
+fn open(filename: &str) -> MyResult<Box<dyn BufRead>> {
+    match filename {
+        "-" => Ok(Box::new(BufReader::new(io::stdin()))),
+        _ => Ok(Box::new(BufReader::new(File::open(filename)?))),
+    }
+}
+
 fn parse_pos(range: &str) -> MyResult<PositionList> {
-    unimplemented!();
+    // Regex to match two integers separated by a dash e.g., 1-4
+    let range_re = Regex::new(r"^(\d+)-(\d+)$").unwrap();
+
+    range
+        .split(',') // Split the range string value on the comma
+        .into_iter()
+        // Iterator over comma-separated position expressions like "1" or "1-4"
+        .map(|val| {
+            parse_index(val)
+                // Single index like "1" becomes a one-element range (0-based)
+                .map(|n| n..n + 1)
+                // If single-index parsing fails, try parsing a hyphenated range like "1-4"
+                .or_else(|e| {
+                    // If not a single index, check whether it matches the range pattern;
+                    // otherwise propagate the original parse error
+                    range_re.captures(val).ok_or(e).and_then(|captures| {
+                        let n1 = parse_index(&captures[1])?;
+                        let n2 = parse_index(&captures[2])?;
+                        if n1 >= n2 {
+                            return Err(format!(
+                                "First number in range ({}) \
+                                must be lower than second number ({})",
+                                n1 + 1,
+                                n2 + 1
+                            ));
+                        }
+                        // Valid range
+                        Ok(n1..n2 + 1)
+                    })
+                })
+        })
+        // Gather values as a Result
+        .collect::<Result<_, _>>()
+        // Since Rust does not automatically change error types
+        // We need to convert e from Err(e) to our custom error type
+        // which is Box<dyn Error>
+        .map_err(From::from)
+}
+
+// Parse the string into a positive index,
+// the index will be one less than the given number,
+// since Rust needs zero-offset indexes (similar to others?)
+fn parse_index(input: &str) -> Result<usize, String> {
+    // Why a closure/anon func here?
+    let value_error = || format!("illegal first value: \"{}\"", input);
+    input
+        .starts_with('+')
+        // Check invalid first value
+        .then(|| Err(value_error()))
+        .unwrap_or_else(|| {
+            input
+                .parse::<NonZeroUsize>()
+                // Convert from non-zero usize to usize explicitly,
+                // since Rust does not do implicit numeric conversion
+                // even when the value is guaranteed to fit.
+                .map(|n| usize::from(n) - 1)
+                .map_err(|_| value_error())
+        })
+}
+
+// Return a new string composed of characters at the given index positions
+// char_pos is a slice (view of a vector) containing a range here
+fn extract_chars(line: &str, char_pos: &[Range<usize>]) -> String {
+    unimplemented!()
+}
+
+fn extract_bytes(line: &str, byte_pos: &[Range<usize>]) -> String {
+    unimplemented!()
 }
 
 #[cfg(test)]
 mod unit_tests {
+    use super::extract_bytes;
+    use super::extract_chars;
     use super::parse_pos;
+
+    #[test]
+    fn test_extract_chars() {
+        assert_eq!(extract_chars("", &[0..1]), "".to_string());
+        assert_eq!(extract_chars("ábc", &[0..1]), "á".to_string());
+        assert_eq!(extract_chars("ábc", &[0..1, 2..3]), "ác".to_string());
+        assert_eq!(extract_chars("ábc", &[0..3]), "ábc".to_string());
+        assert_eq!(extract_chars("ábc", &[2..3, 1..2]), "cb".to_string());
+        assert_eq!(extract_chars("ábc", &[0..1, 1..2, 4..5]), "áb".to_string());
+    }
+
+    #[test]
+    fn test_extract_bytes() {
+        assert_eq!(extract_bytes("ábc", &[0..1]), "�".to_string());
+        assert_eq!(extract_bytes("ábc", &[0..2]), "á".to_string());
+        assert_eq!(extract_bytes("ábc", &[0..3]), "áb".to_string());
+        assert_eq!(extract_bytes("ábc", &[0..4]), "ábc".to_string());
+        assert_eq!(extract_bytes("ábc", &[3..4, 2..3]), "cb".to_string());
+        assert_eq!(extract_bytes("ábc", &[0..2, 5..6]), "á".to_string());
+    }
 
     #[test]
     fn test_parse_pos() {
