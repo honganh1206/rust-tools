@@ -23,7 +23,7 @@ use clap::{App, Arg};
 use std::{
     error::Error,
     fs::File,
-    io::{self, BufRead, BufReader},
+    io::{self, BufRead, BufReader, Write},
 };
 
 type MyResult<T> = Result<T, Box<dyn Error>>;
@@ -88,26 +88,37 @@ fn get_args() -> MyResult<Config> {
 
 fn run(config: Config) -> MyResult<()> {
     let mut file = open(&config.in_file).map_err(|e| format!("{}: {}", config.in_file, e))?;
+
+    // Create output file with either File::create or stdout
+    // Fun fact: Both File::create and io::stdout implement Write trait
+    // so they both satisfy Box<dyn Write>
+    let mut out_file: Box<dyn Write> = match &config.out_file {
+        Some(out_name) => Box::new(File::create(out_name)?),
+        _ => Box::new(io::stdout()),
+    };
+
+    // WE USE A CLOSURE :)
+    // Now I get it: Closure is an anon func that accepts vars from its enclosing env.
+    // Btw Rust's syntax for closure is weird IMO.
+    let mut print = |count: u64, text: &str| -> MyResult<()> {
+        // Accepting count from outer env here
+        if count > 0 {
+            if config.count {
+                // why borrowed here???
+                write!(out_file, "{:>4} {}", count, text)?;
+            } else {
+                write!(out_file, "{}", text)?;
+            }
+        }
+
+        Ok(())
+    };
+
     let mut line = String::new();
     let mut previous = String::new();
     // TIP: No need to declare a type
     // since Rust can infer it?
     let mut count: u64 = 0;
-
-    // WE USE A CLOSURE :)
-    // Now I get it: Closure is an anon func that accepts vars from its enclosing env.
-    // Btw Rust's syntax for closure is weird IMO.
-    let print = |count: u64, text: &str| {
-        // Accepting count from outer env here
-        if count > 0 {
-            if config.count {
-                // why borrowed here???
-                print!("{:>4} {}", count, text);
-            } else {
-                print!("{}", text);
-            }
-        }
-    };
 
     loop {
         // Append delimiter to buffer,
@@ -124,7 +135,7 @@ fn run(config: Config) -> MyResult<()> {
             // so we copy it for later comparison
             // and reset the counter
 
-            print(count, &previous);
+            print(count, &previous)?;
             previous = line.clone();
             count = 0;
         }
@@ -133,7 +144,7 @@ fn run(config: Config) -> MyResult<()> {
         line.clear();
     }
 
-    print(count, &previous);
+    print(count, &previous)?;
     Ok(())
 }
 
