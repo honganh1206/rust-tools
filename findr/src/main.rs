@@ -105,7 +105,30 @@ fn run(config: Config) -> MyResult<()> {
         for entry in WalkDir::new(path) {
             match entry {
                 Err(e) => eprintln!("{}", e),
-                Ok(entry) => println!("{}", entry.path().display()),
+                Ok(entry) => {
+                    // 1st condition: Either no entry type specified
+                    // or match any of the entry type here
+                    if (config.entry_types.is_empty()
+                        || config
+                            .entry_types
+                            .iter()
+                            .any(|entry_type| match entry_type {
+                                Link => entry.file_type().is_symlink(),
+                                Dir => entry.file_type().is_dir(),
+                                File => entry.file_type().is_file(),
+                            })) 
+                    // 2nd condition: Either no file name specified for regex
+                    // or one
+                    && (config.names.is_empty()
+                        || config.names.iter().any(|re| {
+                        re.is_match(
+                            &entry.file_name().to_string_lossy(),
+                        )
+                    }))
+                    {
+                        println!("{}", entry.path().display())
+                    }
+                }
             }
         }
     }
