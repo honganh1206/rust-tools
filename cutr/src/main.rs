@@ -1,5 +1,5 @@
 use crate::Extract::*;
-use anyhow::{Result, anyhow, bail};
+use anyhow::Result;
 use clap::{App, Arg};
 use csv::{ReaderBuilder, StringRecord, WriterBuilder};
 use regex::Regex;
@@ -122,7 +122,35 @@ fn run(config: Config) -> MyResult<()> {
     for filename in &config.files {
         match open(filename) {
             Err(err) => eprintln!("{}: {}", filename, err),
-            Ok(_) => println!("Opened {}", filename),
+            Ok(file) => match &config.extract {
+                Fields(field_pos) => {
+                    // Build CSV reader
+                    let mut reader = ReaderBuilder::new()
+                        .delimiter(config.delimiter)
+                        .has_headers(false)
+                        .from_reader(file);
+
+                    let mut writer = WriterBuilder::new()
+                        .delimiter(config.delimiter)
+                        .from_writer(io::stdout());
+
+                    for record in reader.records() {
+                        // Unwrap result since records() return Result as an iterator iterator
+                        let record = record?;
+                        writer.write_record(extract_fields(&record, field_pos))?
+                    }
+                }
+                Bytes(byte_pos) => {
+                    for line in file.lines() {
+                        println!("{}", extract_bytes(&line?, byte_pos));
+                    }
+                }
+                Chars(char_pos) => {
+                    for line in file.lines() {
+                        println!("{}", extract_chars(&line?, char_pos));
+                    }
+                }
+            },
         }
     }
     Ok(())
@@ -140,8 +168,7 @@ fn parse_pos(range: &str) -> MyResult<PositionList> {
     let range_re = Regex::new(r"^(\d+)-(\d+)$").unwrap();
 
     range
-        .split(',') // Split the range string value on the comma
-        .into_iter()
+        .split(',')
         // Iterator over comma-separated position expressions like "1" or "1-4"
         .map(|val| {
             parse_index(val)
@@ -149,7 +176,8 @@ fn parse_pos(range: &str) -> MyResult<PositionList> {
                 .map(|n| n..n + 1)
                 // If single-index parsing fails, try parsing a hyphenated range like "1-4"
                 .or_else(|e| {
-                    // If not a single index, check whether it matches the range pattern;
+                    // If not a single index,
+                    // check whether it matches the range pattern with captures();
                     // otherwise propagate the original parse error
                     range_re.captures(val).ok_or(e).and_then(|captures| {
                         let n1 = parse_index(&captures[1])?;
@@ -263,7 +291,7 @@ fn extract_fields(record: &StringRecord, field_pos: &[Range<usize>]) -> Vec<Stri
 }
 
 #[cfg(test)]
-mod unit_tests {
+mod tests {
     use super::extract_bytes;
     use super::extract_chars;
     use super::extract_fields;
