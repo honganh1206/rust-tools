@@ -199,18 +199,76 @@ fn parse_index(input: &str) -> Result<usize, String> {
 // Return a new string composed of characters at the given index positions
 // char_pos is a slice (view of a vector) containing a range here
 fn extract_chars(line: &str, char_pos: &[Range<usize>]) -> String {
-    unimplemented!()
+    // Type annotation is required since collect() can return different types.
+    // Rust can infer the vector type here.
+    let chars: Vec<_> = line.chars().collect();
+
+    // # 1st approach
+    //let mut selected: Vec<char> = vec![];
+    //
+    // We need to do clone() here
+    // since we have an iterator over &[Range<usize>] - Slice of references to ranges
+    // but we need to iterate over [Range<uszie>]
+    //for range in char_pos.iter().cloned() {
+    //    for i in range {
+    //        if let Some(val) = chars.get(i) {
+    //            // De-reference the value here
+    //            // as selected accepts elements of type char and not &char
+    //            selected.push(*val)
+    //        }
+    //    }
+    //}
+    //selected.iter().collect()
+
+    // 2nd approach: Avoid mutability and focus on shorter functions
+    char_pos
+        // Return an iterator of references, but we cannot iterate over references
+        .iter()
+        // so instead we clone the iterator to an iterator of values
+        .cloned()
+        // Filter out None and unwrap Some(&char)
+        .flat_map(|range| range.filter_map(|i| chars.get(i)))
+        .collect()
 }
 
 fn extract_bytes(line: &str, byte_pos: &[Range<usize>]) -> String {
-    unimplemented!()
+    let bytes = line.as_bytes();
+    let selected: Vec<_> = byte_pos
+        .iter()
+        .cloned()
+        // Methods like cloned() or copied() aim to turn iterator/collection of references
+        // to iterator/collection of values
+        // Since from_utf8_lossy expects a slice of bytes
+        // we need to convert it from  vector to slice via copied()
+        // Also we do filtering out None and unwrap Some(&usize) here
+        .flat_map(|range| range.filter_map(|i| bytes.get(i).copied()))
+        .collect();
+
+    // Potential problem that byte selection breaks Unicode chars
+    // thus producing invalid UTF-8 string
+    String::from_utf8_lossy(&selected)
+        // Transfer ownership to the caller of this method
+        .into_owned()
+}
+
+fn extract_fields(record: &StringRecord, field_pos: &[Range<usize>]) -> Vec<String> {
+    field_pos
+        .iter()
+        .cloned()
+        // Here we have a slice of strings?
+        .flat_map(|range| range.filter_map(|i| record.get(i)))
+        // Shorthand conversion from usize to String?
+        .map(String::from)
+        .collect()
 }
 
 #[cfg(test)]
 mod unit_tests {
     use super::extract_bytes;
     use super::extract_chars;
+    use super::extract_fields;
     use super::parse_pos;
+    use csv::StringRecord;
 
     #[test]
     fn test_extract_chars() {
@@ -230,6 +288,16 @@ mod unit_tests {
         assert_eq!(extract_bytes("ábc", &[0..4]), "ábc".to_string());
         assert_eq!(extract_bytes("ábc", &[3..4, 2..3]), "cb".to_string());
         assert_eq!(extract_bytes("ábc", &[0..2, 5..6]), "á".to_string());
+    }
+
+    #[test]
+    fn test_extract_fields() {
+        let rec = StringRecord::from(vec!["Captain", "Sham", "12345"]);
+        assert_eq!(extract_fields(&rec, &[0..1]), &["Captain"]);
+        assert_eq!(extract_fields(&rec, &[1..2]), &["Sham"]);
+        assert_eq!(extract_fields(&rec, &[0..1, 2..3]), &["Captain", "12345"]);
+        assert_eq!(extract_fields(&rec, &[0..1, 3..4]), &["Captain"]);
+        assert_eq!(extract_fields(&rec, &[1..2, 0..1]), &["Sham", "Captain"]);
     }
 
     #[test]
