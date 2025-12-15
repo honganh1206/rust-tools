@@ -135,7 +135,7 @@ fn run(config: Config) -> MyResult<()> {
                         .from_writer(io::stdout());
 
                     for record in reader.records() {
-                        // Unwrap result since records() return Result as an iterator iterator
+                        // Unwrap result since records() return Result as an iterator
                         let record = record?;
                         writer.write_record(extract_fields(&record, field_pos))?
                     }
