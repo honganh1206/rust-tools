@@ -1,17 +1,25 @@
 use anyhow::Result;
 use assert_cmd::Command;
 use predicates::prelude::*;
-use pretty_assertions::assert_eq;
+//use pretty_assertions::assert_eq;
 use rand::{Rng, distributions::Alphanumeric};
-use std::{fs, path::Path};
-use sys_info::os_type;
+use std::fs;
 
-const PRG: &str = "grepr";
-const BUSTLE: &str = "tests/inputs/bustle.txt";
+const PRG: &str = "commr";
 const EMPTY: &str = "tests/inputs/empty.txt";
-const FOX: &str = "tests/inputs/fox.txt";
-const NOBODY: &str = "tests/inputs/nobody.txt";
-const INPUTS_DIR: &str = "tests/inputs";
+const FILE1: &str = "tests/inputs/file1.txt";
+const FILE2: &str = "tests/inputs/file2.txt";
+const BLANK: &str = "tests/inputs/blank.txt";
+
+// --------------------------------------------------
+#[test]
+fn dies_no_args() -> Result<()> {
+    Command::cargo_bin(PRG)?
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Usage"));
+    Ok(())
+}
 
 // --------------------------------------------------
 fn gen_bad_file() -> String {
@@ -30,46 +38,44 @@ fn gen_bad_file() -> String {
 
 // --------------------------------------------------
 #[test]
-fn dies_no_args() -> Result<()> {
-    Command::cargo_bin(PRG)?
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("Usage"));
-    Ok(())
-}
-
-// --------------------------------------------------
-#[test]
-fn dies_bad_pattern() -> Result<()> {
-    Command::cargo_bin(PRG)?
-        .args(["*foo", FOX])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains(r#"Invalid pattern "*foo""#));
-    Ok(())
-}
-
-// --------------------------------------------------
-#[test]
-fn warns_bad_file() -> Result<()> {
+fn dies_bad_file1() -> Result<()> {
     let bad = gen_bad_file();
     let expected = format!("{bad}: .* [(]os error 2[)]");
     Command::cargo_bin(PRG)?
-        .args(["foo", &bad])
+        .args([&bad, FILE1])
         .assert()
+        .failure()
         .stderr(predicate::str::is_match(expected)?);
     Ok(())
 }
 
 // --------------------------------------------------
-fn run(args: &[&str], expected_file: &str) -> Result<()> {
-    let windows_file = format!("{expected_file}.windows");
-    let expected_file = if os_type().unwrap() == "Windows" && Path::new(&windows_file).is_file() {
-        &windows_file
-    } else {
-        expected_file
-    };
+#[test]
+fn dies_bad_file2() -> Result<()> {
+    let bad = gen_bad_file();
+    let expected = format!("{bad}: .* [(]os error 2[)]");
+    Command::cargo_bin(PRG)?
+        .args([FILE1, &bad])
+        .assert()
+        .failure()
+        .stderr(predicate::str::is_match(expected)?);
+    Ok(())
+}
 
+// --------------------------------------------------
+#[test]
+fn dies_both_stdin() -> Result<()> {
+    let expected = r#"Both input files cannot be STDIN ("-")"#;
+    Command::cargo_bin(PRG)?
+        .args(["-", "-"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(expected));
+    Ok(())
+}
+
+// --------------------------------------------------
+fn run(args: &[&str], expected_file: &str) -> Result<()> {
     let expected = fs::read_to_string(expected_file)?;
     let output = Command::cargo_bin(PRG)?.args(args).output().expect("fail");
     assert!(output.status.success());
@@ -80,198 +86,11 @@ fn run(args: &[&str], expected_file: &str) -> Result<()> {
 }
 
 // --------------------------------------------------
-#[test]
-fn empty_file() -> Result<()> {
-    run(&["foo", EMPTY], "tests/expected/empty.foo")
-}
-
-// --------------------------------------------------
-#[test]
-fn empty_regex() -> Result<()> {
-    run(&["", FOX], "tests/expected/empty_regex.fox.txt")
-}
-
-// --------------------------------------------------
-#[test]
-fn bustle_capitalized() -> Result<()> {
-    run(
-        &["The", BUSTLE],
-        "tests/expected/bustle.txt.the.capitalized",
-    )
-}
-
-// --------------------------------------------------
-#[test]
-fn bustle_lowercase() -> Result<()> {
-    run(&["the", BUSTLE], "tests/expected/bustle.txt.the.lowercase")
-}
-
-// --------------------------------------------------
-#[test]
-fn bustle_insensitive() -> Result<()> {
-    run(
-        &["--insensitive", "the", BUSTLE],
-        "tests/expected/bustle.txt.the.lowercase.insensitive",
-    )
-}
-
-// --------------------------------------------------
-#[test]
-fn nobody() -> Result<()> {
-    run(&["nobody", NOBODY], "tests/expected/nobody.txt")
-}
-
-// --------------------------------------------------
-#[test]
-fn nobody_insensitive() -> Result<()> {
-    run(
-        &["-i", "nobody", NOBODY],
-        "tests/expected/nobody.txt.insensitive",
-    )
-}
-
-// --------------------------------------------------
-#[test]
-fn multiple_files() -> Result<()> {
-    run(
-        &["The", BUSTLE, EMPTY, FOX, NOBODY],
-        "tests/expected/all.the.capitalized",
-    )
-}
-
-// --------------------------------------------------
-#[test]
-fn multiple_files_insensitive() -> Result<()> {
-    run(
-        &["-i", "the", BUSTLE, EMPTY, FOX, NOBODY],
-        "tests/expected/all.the.lowercase.insensitive",
-    )
-}
-
-// --------------------------------------------------
-#[test]
-fn recursive() -> Result<()> {
-    run(
-        &["--recursive", "dog", INPUTS_DIR],
-        "tests/expected/dog.recursive",
-    )
-}
-
-// --------------------------------------------------
-#[test]
-fn recursive_insensitive() -> Result<()> {
-    run(
-        &["-ri", "then", INPUTS_DIR],
-        "tests/expected/the.recursive.insensitive",
-    )
-}
-
-// --------------------------------------------------
-#[test]
-fn sensitive_count_capital() -> Result<()> {
-    run(
-        &["--count", "The", BUSTLE],
-        "tests/expected/bustle.txt.the.capitalized.count",
-    )
-}
-
-// --------------------------------------------------
-#[test]
-fn sensitive_count_lower() -> Result<()> {
-    run(
-        &["--count", "the", BUSTLE],
-        "tests/expected/bustle.txt.the.lowercase.count",
-    )
-}
-
-// --------------------------------------------------
-#[test]
-fn insensitive_count() -> Result<()> {
-    run(
-        &["-ci", "the", BUSTLE],
-        "tests/expected/bustle.txt.the.lowercase.insensitive.count",
-    )
-}
-
-// --------------------------------------------------
-#[test]
-fn nobody_count() -> Result<()> {
-    run(&["-c", "nobody", NOBODY], "tests/expected/nobody.txt.count")
-}
-
-// --------------------------------------------------
-#[test]
-fn nobody_count_insensitive() -> Result<()> {
-    run(
-        &["-ci", "nobody", NOBODY],
-        "tests/expected/nobody.txt.insensitive.count",
-    )
-}
-
-// --------------------------------------------------
-#[test]
-fn sensitive_count_multiple() -> Result<()> {
-    run(
-        &["-c", "The", BUSTLE, EMPTY, FOX, NOBODY],
-        "tests/expected/all.the.capitalized.count",
-    )
-}
-
-// --------------------------------------------------
-#[test]
-fn insensitive_count_multiple() -> Result<()> {
-    run(
-        &["-ic", "the", BUSTLE, EMPTY, FOX, NOBODY],
-        "tests/expected/all.the.lowercase.insensitive.count",
-    )
-}
-
-// --------------------------------------------------
-#[test]
-fn warns_dir_not_recursive() -> Result<()> {
-    let stdout = "tests/inputs/fox.txt:\
-        The quick brown fox jumps over the lazy dog.";
-    Command::cargo_bin(PRG)?
-        .args(["fox", INPUTS_DIR, FOX])
-        .assert()
-        .stderr(predicate::str::contains("tests/inputs is a directory"))
-        .stdout(predicate::str::contains(stdout));
-    Ok(())
-}
-
-// --------------------------------------------------
-#[test]
-fn stdin() -> Result<()> {
-    let input = fs::read_to_string(BUSTLE)?;
-    let expected = fs::read_to_string("tests/expected/bustle.txt.the.capitalized")?;
-
-    let output = Command::cargo_bin(PRG)?
-        .arg("The")
-        .write_stdin(input)
-        .output()
-        .expect("fail");
-    assert!(output.status.success());
-
-    let stdout = String::from_utf8(output.stdout).expect("invalid UTF-8");
-    assert_eq!(stdout, expected);
-    Ok(())
-}
-
-// --------------------------------------------------
-#[test]
-fn stdin_insensitive_count() -> Result<()> {
-    let files = &[BUSTLE, EMPTY, FOX, NOBODY];
-
-    let mut input = String::new();
-    for file in files {
-        input += &fs::read_to_string(file)?;
-    }
-
-    let expected_file = "tests/expected/the.recursive.insensitive.count.stdin";
+fn run_stdin(args: &[&str], input_file: &str, expected_file: &str) -> Result<()> {
+    let input = fs::read_to_string(input_file)?;
     let expected = fs::read_to_string(expected_file)?;
-
     let output = Command::cargo_bin(PRG)?
-        .args(["-ci", "the", "-"])
+        .args(args)
         .write_stdin(input)
         .output()
         .expect("fail");
@@ -280,4 +99,242 @@ fn stdin_insensitive_count() -> Result<()> {
     let stdout = String::from_utf8(output.stdout).expect("invalid UTF-8");
     assert_eq!(stdout, expected);
     Ok(())
+}
+
+// --------------------------------------------------
+#[test]
+fn empty_empty() -> Result<()> {
+    run(&[EMPTY, EMPTY], "tests/expected/empty_empty.out")
+}
+
+// --------------------------------------------------
+#[test]
+fn file1_file1() -> Result<()> {
+    run(&[FILE1, FILE1], "tests/expected/file1_file1.out")
+}
+
+// --------------------------------------------------
+#[test]
+fn file1_file2() -> Result<()> {
+    run(&[FILE1, FILE2], "tests/expected/file1_file2.out")
+}
+
+// --------------------------------------------------
+#[test]
+fn file1_empty() -> Result<()> {
+    run(&[FILE1, EMPTY], "tests/expected/file1_empty.out")
+}
+
+// --------------------------------------------------
+#[test]
+fn empty_file2() -> Result<()> {
+    run(&[EMPTY, FILE2], "tests/expected/empty_file2.out")
+}
+
+// --------------------------------------------------
+#[test]
+fn file1_file2_1() -> Result<()> {
+    run(&["-1", FILE1, FILE2], "tests/expected/file1_file2.1.out")
+}
+
+// --------------------------------------------------
+#[test]
+fn file1_file2_2() -> Result<()> {
+    run(&["-2", FILE1, FILE2], "tests/expected/file1_file2.2.out")
+}
+
+// --------------------------------------------------
+#[test]
+fn file1_file2_3() -> Result<()> {
+    run(&["-3", FILE1, FILE2], "tests/expected/file1_file2.3.out")
+}
+
+// --------------------------------------------------
+#[test]
+fn file1_file2_1_2() -> Result<()> {
+    run(&["-12", FILE1, FILE2], "tests/expected/file1_file2.12.out")
+}
+
+// --------------------------------------------------
+#[test]
+fn file1_file2_2_3() -> Result<()> {
+    run(&["-23", FILE1, FILE2], "tests/expected/file1_file2.23.out")
+}
+
+// --------------------------------------------------
+#[test]
+fn file1_file2_13() -> Result<()> {
+    run(&["-13", FILE1, FILE2], "tests/expected/file1_file2.13.out")
+}
+
+// --------------------------------------------------
+#[test]
+fn file1_file2_123() -> Result<()> {
+    run(
+        &["-123", FILE1, FILE2],
+        "tests/expected/file1_file2.123.out",
+    )
+}
+
+// --------------------------------------------------
+// insensitive
+// --------------------------------------------------
+#[test]
+fn file1_file2_1_i() -> Result<()> {
+    run(
+        &["-1", "-i", FILE1, FILE2],
+        "tests/expected/file1_file2.1.i.out",
+    )
+}
+
+// --------------------------------------------------
+#[test]
+fn file1_file2_2_i() -> Result<()> {
+    run(
+        &["-2", "-i", FILE1, FILE2],
+        "tests/expected/file1_file2.2.i.out",
+    )
+}
+
+// --------------------------------------------------
+#[test]
+fn file1_file2_3_i() -> Result<()> {
+    run(
+        &["-3", "-i", FILE1, FILE2],
+        "tests/expected/file1_file2.3.i.out",
+    )
+}
+
+// --------------------------------------------------
+#[test]
+fn file1_file2_1_2_i() -> Result<()> {
+    run(
+        &["-12", "-i", FILE1, FILE2],
+        "tests/expected/file1_file2.12.i.out",
+    )
+}
+
+// --------------------------------------------------
+#[test]
+fn file1_file2_2_3_i() -> Result<()> {
+    run(
+        &["-23", "-i", FILE1, FILE2],
+        "tests/expected/file1_file2.23.i.out",
+    )
+}
+
+// --------------------------------------------------
+#[test]
+fn file1_file2_13_i() -> Result<()> {
+    run(
+        &["-13", "-i", FILE1, FILE2],
+        "tests/expected/file1_file2.13.i.out",
+    )
+}
+
+// --------------------------------------------------
+#[test]
+fn file1_file2_123_i() -> Result<()> {
+    run(
+        &["-123", "-i", FILE1, FILE2],
+        "tests/expected/file1_file2.123.i.out",
+    )
+}
+
+// --------------------------------------------------
+#[test]
+fn stdin_file1() -> Result<()> {
+    run_stdin(
+        &["-123", "-i", "-", FILE2],
+        FILE1,
+        "tests/expected/file1_file2.123.i.out",
+    )
+}
+
+// --------------------------------------------------
+#[test]
+fn stdin_file2() -> Result<()> {
+    run_stdin(
+        &["-123", "-i", FILE1, "-"],
+        FILE2,
+        "tests/expected/file1_file2.123.i.out",
+    )
+}
+
+// --------------------------------------------------
+#[test]
+fn file1_file2_delim() -> Result<()> {
+    run(
+        &[FILE1, FILE2, "-d", ":"],
+        "tests/expected/file1_file2.delim.out",
+    )
+}
+
+// --------------------------------------------------
+#[test]
+fn file1_file2_1_delim() -> Result<()> {
+    run(
+        &[FILE1, FILE2, "-1", "-d", ":"],
+        "tests/expected/file1_file2.1.delim.out",
+    )
+}
+
+// --------------------------------------------------
+#[test]
+fn file1_file2_2_delim() -> Result<()> {
+    run(
+        &[FILE1, FILE2, "-2", "-d", ":"],
+        "tests/expected/file1_file2.2.delim.out",
+    )
+}
+
+// --------------------------------------------------
+#[test]
+fn file1_file2_3_delim() -> Result<()> {
+    run(
+        &[FILE1, FILE2, "-3", "-d", ":"],
+        "tests/expected/file1_file2.3.delim.out",
+    )
+}
+
+// --------------------------------------------------
+#[test]
+fn file1_file2_12_delim() -> Result<()> {
+    run(
+        &[FILE1, FILE2, "-12", "-d", ":"],
+        "tests/expected/file1_file2.12.delim.out",
+    )
+}
+
+// --------------------------------------------------
+#[test]
+fn file1_file2_23_delim() -> Result<()> {
+    run(
+        &[FILE1, FILE2, "-23", "-d", ":"],
+        "tests/expected/file1_file2.23.delim.out",
+    )
+}
+
+// --------------------------------------------------
+#[test]
+fn file1_file2_13_delim() -> Result<()> {
+    run(
+        &[FILE1, FILE2, "-13", "-d", ":"],
+        "tests/expected/file1_file2.13.delim.out",
+    )
+}
+
+// --------------------------------------------------
+#[test]
+fn file1_file2_123_delim() -> Result<()> {
+    run(
+        &[FILE1, FILE2, "-123", "-d", ":"],
+        "tests/expected/file1_file2.123.delim.out",
+    )
+}
+
+// --------------------------------------------------
+#[test]
+fn blank_file1() -> Result<()> {
+    run(&[BLANK, FILE1], "tests/expected/blank_file1.out")
 }
