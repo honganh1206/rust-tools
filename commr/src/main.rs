@@ -1,5 +1,7 @@
+use crate::Column::*;
 use clap::{App, Arg};
 use std::{
+    cmp::Ordering::*,
     error::Error,
     fs::File,
     io::{self, BufRead, BufReader},
@@ -8,7 +10,7 @@ use std::{
 type MyResult<T> = Result<T, Box<dyn Error>>;
 
 #[derive(Debug)]
-pub struct Config {
+struct Config {
     file1: String,
     file2: String,
     show_col1: bool, // Lines unique to 1st file
@@ -16,6 +18,17 @@ pub struct Config {
     show_col3: bool, // Lines common to both files
     insensitive: bool,
     delimiter: String,
+}
+
+// Decide in which column should we print the value
+// with lifetime specifier so we can use values out of scope?
+enum Column<'a> {
+    // Unique values to 1st file
+    Col1(&'a str),
+    // Unique values to 2nd file
+    Col2(&'a str),
+    // Shared values
+    Col3(&'a str),
 }
 
 // Select or reject lines common in two files
@@ -106,8 +119,97 @@ fn run(config: Config) -> MyResult<()> {
     if file1 == "-" && file2 == "-" {
         return Err(From::from("Both input files cannot be STDIN (\"-\")"));
     }
-    let _file1 = open(file1)?;
-    let _file2 = open(file2)?;
-    println!("Opened {} and {}", file1, file2);
+
+    let case = |line: String| {
+        if config.insensitive {
+            line.to_lowercase()
+        } else {
+            line
+        }
+    };
+
+    // Handle indented printing? of values
+    let print = |col: Column| {
+        let mut columns = vec![];
+        match col {
+            Col1(val) => {
+                if config.show_col1 {
+                    columns.push(val);
+                }
+            }
+            Col2(val) => {
+                if config.show_col2 {
+                    if config.show_col1 {
+                        // Push tabs?...
+                        columns.push("");
+                    }
+                    columns.push(val);
+                }
+            }
+            Col3(val) => {
+                if config.show_col3 {
+                    if config.show_col1 {
+                        columns.push("");
+                    }
+                    if config.show_col2 {
+                        columns.push("");
+                    }
+                    columns.push(val);
+                }
+            }
+        };
+        if !columns.is_empty() {
+            println!("{}", columns.join(&config.delimiter));
+        }
+    };
+
+    // Return an iterator over the lines of the current file
+    // map_while() takes a predicate (functions that return a boolean value)
+    // then apply that predicate to each element,
+    // while removing errors by returning Some(_)?
+    let mut lines1 = open(file1)?.lines().map_while(Result::ok).map(case);
+    let mut lines2 = open(file2)?.lines().map_while(Result::ok).map(case);
+
+    // Advance the iterator and return the 1st value
+    let mut line1 = lines1.next();
+    let mut line2 = lines2.next();
+
+    // Return true if of type Some()
+    while line1.is_some() || line2.is_some() {
+        // Use a tuple - heterogeneous sequence
+        match (&line1, &line2) {
+            // Common lines
+            // compare based on ASCII value
+            (Some(val1), Some(val2)) => match val1.cmp(val2) {
+                Equal => {
+                    print(Col3(val1));
+                    line1 = lines1.next();
+                    line2 = lines2.next();
+                }
+                // Print unique value from first file
+                Less => {
+                    print(Col1(val1));
+                    line1 = lines1.next();
+                }
+                // Print unique value from 2nd file
+                // Example: a > B, so we print B first on 2nd column
+                // then get the next value in 2nd file to compare with a
+                Greater => {
+                    print(Col2(val2));
+                    line2 = lines2.next();
+                }
+            },
+            (Some(val1), None) => {
+                print(Col1(val1));
+                line1 = lines1.next();
+            }
+            (None, Some(val2)) => {
+                print(Col2(val2));
+                line2 = lines2.next();
+            }
+            _ => (),
+        }
+    }
+
     Ok(())
 }
