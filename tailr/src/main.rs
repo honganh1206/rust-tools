@@ -5,7 +5,13 @@ use once_cell::sync::OnceCell;
 use regex::Regex;
 use std::error::Error;
 use std::fs::File;
-use std::io::BufRead;
+use std::io::{
+    BufRead,
+    BufReader,
+    Read, // Read bytes from a source
+    Seek, // A cursor which can be moved within a stream of bytes to track bytes?
+    SeekFrom,
+};
 
 type MyResult<T> = Result<T, Box<dyn Error>>;
 
@@ -90,15 +96,26 @@ fn get_args() -> MyResult<Config> {
 }
 
 fn run(config: Config) -> MyResult<()> {
-    for filename in config.files {
-        match File::open(&filename) {
+    let num_files = config.files.len();
+    // Iterator yields the value and its index wow
+    for (file_num, filename) in config.files.iter().enumerate() {
+        match File::open(filename) {
             Err(err) => eprintln!("{}: {}", filename, err),
-            Ok(_) => {
-                let (total_lines, total_bytes) = count_lines_bytes(&filename)?;
-                println!(
-                    "{} has {} lines and {} bytes",
-                    filename, total_lines, total_bytes
-                );
+            Ok(file) => {
+                if !config.quiet && num_files > 1 {
+                    println!(
+                        "{}==> {} <==",
+                        if file_num > 0 { "\n" } else { "" },
+                        filename
+                    );
+                }
+                let (total_lines, total_bytes) = count_lines_bytes(filename)?;
+                let file = BufReader::new(file);
+                if let Some(num_bytes) = &config.bytes {
+                    print_bytes(file, num_bytes, total_bytes)?;
+                } else {
+                    print_lines(file, &config.lines, total_lines)?;
+                }
             }
         }
     }
@@ -135,17 +152,85 @@ fn parse_num(val: &str) -> MyResult<TakeValue> {
 // and return the total number of lines and bytes
 fn count_lines_bytes(filename: &str) -> MyResult<(i64, i64)> {
     // Check if user requests more lines or bytes than the file contains
-    unimplemented!()
+    let mut file = BufReader::new(File::open(filename)?);
+    let mut num_lines = 0;
+    let mut num_bytes = 0;
+    // Rust can just declare a vector of unknown type wow
+    let mut buf = Vec::new();
+    loop {
+        // Read into buf until break line delimiter
+        let bytes_read = file.read_until(b'\n', &mut buf)?;
+        if bytes_read == 0 {
+            // Reach EOF?
+            break;
+        }
+        num_lines += 1;
+        num_bytes += bytes_read as i64;
+        buf.clear();
+    }
+    Ok((num_lines, num_bytes))
 }
 
 fn print_lines(mut file: impl BufRead, num_lines: &TakeValue, total_lines: i64) -> MyResult<()> {
     // We can find the starting line's index using num_lines and total_lines?
-    unimplemented!();
+    if let Some(start) = get_start_index(num_lines, total_lines) {
+        let mut line_num = 0;
+        let mut buf = Vec::new();
+        loop {
+            let bytes_read = file.read_until(b'\n', &mut buf)?;
+            if bytes_read == 0 {
+                break;
+            }
+            if line_num >= start {
+                print!("{}", String::from_utf8_lossy(&buf));
+            }
+            line_num += 1;
+            buf.clear()
+        }
+    }
+    Ok(())
 }
 
-// Find the starting byte position?
+fn print_bytes<T: Read + Seek>(
+    mut file: T,
+    num_bytes: &TakeValue,
+    total_bytes: i64,
+) -> MyResult<()> {
+    // I still dont get why we have to do this sometimes...
+    // maybe because of type safety so that we ensure there is always a Some()?
+    if let Some(start) = get_start_index(num_bytes, total_bytes) {
+        // Seek (repositioning the cursor) to an offset in a stream?
+        file.seek(SeekFrom::Start(start))?;
+        let mut buffer = Vec::new();
+        file.read_to_end(&mut buffer)?;
+        if !buffer.is_empty() {
+            print!("{}", String::from_utf8_lossy(&buffer));
+        }
+    }
+
+    Ok(())
+}
+
+// Find the starting byte position to query
 fn get_start_index(take_val: &TakeValue, total: i64) -> Option<u64> {
-    unimplemented!();
+    match take_val {
+        PlusZero => {
+            // Everything should be selected
+            if total > 0 { Some(0) } else { None }
+        }
+        TakeNum(num) => {
+            // Certain lines should be selected, depending on the value
+            if num == &0 || total == 0 || num > &total {
+                // Either take all or no line or exceeding file length
+                None
+            } else {
+                // Are we seriously comparing addresses here?
+                // If negative value then take from end + value, else from beginning
+                let start = if num < &0 { total + num } else { num - 1 };
+                Some(if start < 0 { 0 } else { start as u64 })
+            }
+        }
+    }
 }
 
 #[cfg(test)]
