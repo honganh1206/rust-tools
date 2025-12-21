@@ -1,6 +1,14 @@
 use clap::{App, Arg};
+use rand::{SeedableRng, prelude::SliceRandom, rngs::StdRng};
 use regex::{Regex, RegexBuilder};
-use std::error::Error;
+use std::{
+    error::Error,
+    ffi::OsStr,
+    fs::{self, File},
+    io::{BufRead, BufReader},
+    path::PathBuf,
+};
+use walkdir::WalkDir;
 
 type MyResult<T> = Result<T, Box<dyn Error>>;
 
@@ -10,6 +18,12 @@ struct Config {
     pattern: Option<Regex>,
     // Control random selections
     seed: Option<u64>,
+}
+
+#[derive(Debug)]
+struct Fortune {
+    source: String,
+    text: String,
 }
 
 fn main() {
@@ -72,7 +86,27 @@ fn get_args() -> MyResult<Config> {
 }
 
 fn run(config: Config) -> MyResult<()> {
-    println!("{:#?}", config);
+    let files = find_files(&config.sources)?;
+    let fortunes = read_fortunes(&files)?;
+    if let Some(pattern) = config.pattern {
+        // Remember last fortune source but why?
+        let mut prev_src = None;
+        for fortune in fortunes.iter().filter(|f| pattern.is_match(&f.text)) {
+            // Turn &Option<T> to Option<&> with as_ref()
+            if prev_src.as_ref() != Some(&fortune.source) {
+                eprintln!("({})\n%", fortune.source);
+                prev_src = Some(fortune.source.clone());
+            }
+            println!("{}\n%", fortune.text)
+        }
+    } else {
+        println!(
+            "{}",
+            pick_fortune(&fortunes, config.seed)
+                .or_else(|| Some("No fortunes found".to_string()))
+                .unwrap()
+        )
+    }
     Ok(())
 }
 
@@ -81,9 +115,83 @@ fn parse_u64(val: &str) -> MyResult<u64> {
         .map_err(|_| format!("\"{}\" not a valid integer", val).into())
 }
 
+// Using PathBuf is an owned version of Path
+fn find_files(paths: &[String]) -> MyResult<Vec<PathBuf>> {
+    // Rust type for OS's representation of string that might not
+    // be a valid UTF-8 string
+    let dat = OsStr::new("dat");
+    let mut files = vec![];
+
+    for path in paths {
+        match fs::metadata(path) {
+            Err(e) => return Err(format!("{}: {}", path, e).into()),
+            Ok(_) => files.extend(
+                // Extend a collection with content from an iterator
+                WalkDir::new(path)
+                    .into_iter()
+                    // Filter out None and wrap inside Ok
+                    .filter_map(Result::ok)
+                    .filter(|e| e.file_type().is_file() && e.path().extension() != Some(dat))
+                    // Get the full path &Path of this DirEntry
+                    // then convert to owned version PathBuf
+                    .map(|e| e.path().into()),
+            ),
+        }
+    }
+
+    files.sort();
+    files.dedup();
+    Ok(files)
+}
+
+fn read_fortunes(paths: &[PathBuf]) -> MyResult<Vec<Fortune>> {
+    let mut fortunes = vec![];
+    let mut buffer = vec![];
+
+    for path in paths {
+        let basename = path.file_name().unwrap().to_string_lossy().into_owned();
+        let file = File::open(path)
+            .map_err(|e| format!("{}: {}", path.to_string_lossy().into_owned(), e))?;
+
+        // Why dont we use Ok(line) for iterator?
+        // because we need String type not String wrapped by Ok
+        for line in BufReader::new(file).lines().map_while(Result::ok) {
+            if line == "%" {
+                // Begin of fortune?
+                if !buffer.is_empty() {
+                    fortunes.push(Fortune {
+                        source: basename.clone(),
+                        text: buffer.join("\n"),
+                    });
+                    buffer.clear();
+                }
+            } else {
+                buffer.push(line.to_string())
+            }
+        }
+    }
+
+    Ok(fortunes)
+}
+
+fn pick_fortune(fortunes: &[Fortune], seed: Option<u64>) -> Option<String> {
+    // Use a pseudorandom number generator (PRNG)
+    // and it will ALWAYS make the same selection following the seed
+    if let Some(val) = seed {
+        let mut rng = StdRng::seed_from_u64(val);
+        fortunes.choose(&mut rng).map(|f| f.text.to_string())
+    } else {
+        // Totally random at this point
+        let mut rng = rand::thread_rng();
+        fortunes.choose(&mut rng).map(|f| f.text.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_u64;
+    use super::{Fortune, find_files, parse_u64, pick_fortune, read_fortunes};
+    use std::path::PathBuf;
+
     #[test]
     fn test_parse_u64() {
         let res = parse_u64("a");
@@ -97,5 +205,104 @@ mod tests {
         let res = parse_u64("4");
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), 4);
+    }
+
+    #[test]
+    fn test_find_files() {
+        // Verify that the function finds a file known to exist
+        let res = find_files(&["./tests/inputs/jokes".to_string()]);
+        assert!(res.is_ok());
+        let files = res.unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(
+            files.first().unwrap().to_string_lossy(),
+            "./tests/inputs/jokes"
+        );
+
+        // Fails to find a bad file
+        let res = find_files(&["/path/does/not/exist".to_string()]);
+        assert!(res.is_err());
+
+        // Finds all the input files, excludes ".dat"
+        // which are binary files containing accessing the record?
+        let res = find_files(&["./tests/inputs".to_string()]);
+        assert!(res.is_ok());
+        // Check number and order of files
+        let files = res.unwrap();
+        assert_eq!(files.len(), 5);
+        let first = files.first().unwrap().display().to_string();
+        assert!(first.contains("ascii-art"));
+        let last = files.last().unwrap().display().to_string();
+        assert!(last.contains("quotes"));
+
+        // Test for multiple sources, path must be unique and sorted
+        let res = find_files(&[
+            "./tests/inputs/jokes".to_string(),
+            "./tests/inputs/ascii-art".to_string(),
+            "./tests/inputs/jokes".to_string(),
+        ]);
+        assert!(res.is_ok());
+        let files = res.unwrap();
+        assert_eq!(files.len(), 2);
+        if let Some(filename) = files.first().unwrap().file_name() {
+            assert_eq!(filename.to_string_lossy(), "ascii-art".to_string())
+        }
+        if let Some(filename) = files.last().unwrap().file_name() {
+            assert_eq!(filename.to_string_lossy(), "jokes".to_string())
+        }
+    }
+
+    #[test]
+    fn test_read_fortunes() {
+        // One input file
+        let res = read_fortunes(&[PathBuf::from("./tests/inputs/jokes")]);
+        assert!(res.is_ok());
+        if let Ok(fortunes) = res {
+            // Correct number and sorting
+            assert_eq!(fortunes.len(), 6);
+            assert_eq!(
+                fortunes.first().unwrap().text,
+                "Q. What do you call a head of lettuce in a shirt and tie?\n\
+A. Collared greens."
+            );
+            assert_eq!(
+                fortunes.last().unwrap().text,
+                "Q: What do you call a deer wearing an eye patch?\n\
+A: A bad idea (bad-eye deer)."
+            );
+        }
+        // Multiple input files
+        let res = read_fortunes(&[
+            PathBuf::from("./tests/inputs/jokes"),
+            PathBuf::from("./tests/inputs/quotes"),
+        ]);
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap().len(), 11);
+    }
+
+    #[test]
+    fn test_pick_fortune() {
+        // Create a slice of fortunes
+        let fortunes = &[
+            Fortune {
+                source: "fortunes".to_string(),
+                text: "You cannot achieve the impossible without \
+attempting the absurd."
+                    .to_string(),
+            },
+            Fortune {
+                source: "fortunes".to_string(),
+                text: "Assumption is the mother of all screw-ups.".to_string(),
+            },
+            Fortune {
+                source: "fortunes".to_string(),
+                text: "Neckties strangle clear thinking.".to_string(),
+            },
+        ];
+        // Pick a fortune with a seed
+        assert_eq!(
+            pick_fortune(fortunes, Some(1)).unwrap(),
+            "Neckties strangle clear thinking.".to_string()
+        )
     }
 }
