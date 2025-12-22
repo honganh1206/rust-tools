@@ -1,6 +1,13 @@
+mod owner;
+
+use chrono::{DateTime, Local};
 use clap::{App, Arg};
-use std::{error::Error, path::PathBuf};
+use owner::Owner;
+use std::os::unix::fs::MetadataExt;
+use std::{error::Error, fs, path::PathBuf};
 use tabular::{Row, Table};
+// Call to C libs?
+use users::{get_group_by_gid, get_user_by_uid};
 
 type MyResult<T> = Result<T, Box<dyn Error>>;
 
@@ -45,58 +52,99 @@ fn get_args() -> MyResult<Config> {
                 .long("all"),
         )
         .get_matches();
-    //Ok(Config {
-    //paths: ...,
-    //long: ...,
-    //show_hidden:})
-    //...,
+
+    Ok(Config {
+        paths: matches.values_of_lossy("paths").unwrap(),
+        long: matches.is_present("long"),
+        show_hidden: matches.is_present("all"),
+    })
 }
 
 fn run(config: Config) -> MyResult<()> {
     let paths = find_files(&config.paths, config.show_hidden)?;
-    for path in paths {
-        println!("{}", path.display());
+    if config.long {
+        println!("{}", format_output(&paths)?);
+    } else {
+        for path in paths {
+            println!("{}", path.display());
+        }
     }
     Ok(())
 }
 
 fn find_files(paths: &[String], show_hidden: bool) -> MyResult<Vec<PathBuf>> {
-    unimplemented!();
+    let mut results = vec![];
+    for name in paths {
+        match fs::metadata(name) {
+            Err(e) => eprintln!("{}: {}", name, e),
+            Ok(meta) => {
+                if meta.is_dir() {
+                    // Get every file in dir
+                    for entry in fs::read_dir(name)? {
+                        let entry = entry?;
+                        let path = entry.path();
+                        let is_hidden = path.file_name().map_or(false, |file_name| {
+                            file_name.to_string_lossy().starts_with('.')
+                        });
+                        if !is_hidden || show_hidden {
+                            results.push(entry.path())
+                        }
+                    }
+                } else {
+                    // Get the file path
+                    results.push(PathBuf::from(name))
+                }
+            }
+        }
+    }
+
+    Ok(results)
 }
 
-// Validate output with long flag
+/// Validate output with long flag
 fn format_output(paths: &[PathBuf]) -> MyResult<String> {
     let fmt = "{:<}{:<} {:>} {:<} {:<} {:>} {:<} {:<}";
     let mut table = Table::new(fmt);
     for path in paths {
+        let metadata = path.metadata()?;
+
+        let uid = metadata.uid();
+        let user = get_user_by_uid(uid)
+            .map(|u| u.name().to_string_lossy().into_owned())
+            // Fallback
+            .unwrap_or_else(|| uid.to_string());
+
+        let gid = metadata.gid();
+        let group = get_group_by_gid(gid)
+            .map(|g| g.name().to_string_lossy().into_owned())
+            .unwrap_or_else(|| gid.to_string());
+
+        let file_type = if path.is_dir() { "d" } else { "-" };
+        let perms = format_mode(metadata.mode());
+        let modified: DateTime<Local> = DateTime::from(metadata.modified()?);
+
         table.add_row(
             Row::new()
-                .with_cell("") // 1 "d" or "-"
-                .with_cell("") // 2 permissions
-                .with_cell("") // 3 number of links
-                .with_cell("") // 4 user name
-                .with_cell("") // 5 group name
-                .with_cell("") // 6 size
-                .with_cell("") // 7 modification
-                .with_cell(""), // 8 path
+                .with_cell(file_type) // 1 "d" or "-"
+                .with_cell(perms) // 2 permissions
+                .with_cell(metadata.nlink()) // 3 number of links
+                .with_cell(user) // 4 user name
+                .with_cell(group) // 5 group name
+                .with_cell(metadata.len()) // 6 size
+                .with_cell(modified.format("%b %d %y %H:%M")) // 7 modification
+                .with_cell(path.display()), // 8 path
         );
     }
     Ok(format!("{}", table))
 }
 
-/// Given a file mode in octal format like 0o751,
-/// return a string like "rwxr-x--x"
-fn format_mode(mode: u32) -> String {
-    unimplemented!();
-}
-
-// Validate output for file
+/// Validate output for file
 fn long_match(line: &str, expected_name: &str, expected_perms: &str, expected_size: Option<&str>) {
     let parts: Vec<_> = line.split_whitespace().collect();
     // why this range?
-    assert!(parts.len() > 0 && parts.len() <= 10);
+    assert!(!parts.is_empty() && parts.len() <= 10);
 
-    let perms = parts.get(0).unwrap();
+    let perms = parts.first().unwrap();
     assert_eq!(perms, &expected_perms);
 
     if let Some(size) = expected_size {
@@ -109,9 +157,31 @@ fn long_match(line: &str, expected_name: &str, expected_perms: &str, expected_si
     assert_eq!(display_name, &expected_name);
 }
 
+fn mk_triple(mode: u32, owner: Owner) -> String {
+    let [read, write, execute] = owner.masks();
+    format!(
+        "{}{}{}",
+        if mode & read == 0 { "-" } else { "r" },
+        if mode & write == 0 { "-" } else { "w" },
+        if mode & execute == 0 { "-" } else { "x" },
+    )
+}
+
+/// Given a file mode in octal format like 0o751,
+/// return a string like "rwxr-x--x"
+fn format_mode(mode: u32) -> String {
+    format!(
+        "{}{}{}",
+        mk_triple(mode, Owner::User),
+        mk_triple(mode, Owner::Group),
+        mk_triple(mode, Owner::Other),
+    )
+}
+
 #[cfg(test)]
 mod test {
-    use super::{find_files, format_mode, format_output, long_match};
+    use super::owner::Owner;
+    use super::{find_files, format_mode, format_output, long_match, mk_triple};
     use std::path::PathBuf;
 
     #[test]
@@ -251,5 +321,13 @@ mod test {
         );
         let dir_line = lines.remove(0);
         long_match(&dir_line, "tests/inputs/dir", "drwxr-xr-x", None);
+    }
+
+    #[test]
+    fn test_mk_triple() {
+        assert_eq!(mk_triple(0o751, Owner::User), "rwx");
+        assert_eq!(mk_triple(0o751, Owner::Group), "r-x");
+        assert_eq!(mk_triple(0o751, Owner::Other), "--x");
+        assert_eq!(mk_triple(0o600, Owner::Other), "---");
     }
 }
